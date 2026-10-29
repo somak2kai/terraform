@@ -4,7 +4,6 @@
 package rpcapi
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/hashicorp/go-slug/sourcebundle"
@@ -217,14 +216,15 @@ func newHandle[ObjT any](t *handleTable, obj ObjT) handle[ObjT] {
 // race with closing the dependency handle, causing that handle to no longer
 // be available by the time this function is running. In that case, the
 // returned error will be [newHandleErrorNoParent].
+//
+// If the dependency handle refers to an object of a different type than
+// expected, the returned error will be [newHandleErrorWrongParentType].
 func newHandleWithDependency[ObjT, DepT any](t *handleTable, obj ObjT, dep handle[DepT]) (handle[ObjT], error) {
 	t.mu.Lock()
 	if depObjectI, exists := t.handleObjs[int64(dep)]; !exists {
 		return handle[ObjT](0), newHandleErrorNoParent
-	} else if depObject, ok := depObjectI.(DepT); !ok {
-		// It's caller's responsibility to ensure that it's passing in valid handles.
-		// (This will typically be ensured by our type-safe wrapper methods)
-		panic(fmt.Sprintf("dependency handle %d is %T, not %T", int64(dep), depObjectI, depObject))
+	} else if _, ok := depObjectI.(DepT); !ok {
+		return handle[ObjT](0), newHandleErrorWrongParentType
 	}
 	hnd := t.nextHandle
 	t.nextHandle++ // NOTE: We're assuming int64 is big enough for overflow to be impractical
@@ -276,13 +276,16 @@ func closeHandle[ObjT any](t *handleTable, hnd handle[ObjT]) error {
 type newHandleError rune
 
 const (
-	newHandleErrorNoParent newHandleError = '^'
+	newHandleErrorNoParent        newHandleError = '^'
+	newHandleErrorWrongParentType newHandleError = 'T'
 )
 
 func (err newHandleError) Error() string {
 	switch err {
 	case newHandleErrorNoParent:
 		return "parent handle does not exist"
+	case newHandleErrorWrongParentType:
+		return "parent handle refers to an object of the wrong type"
 	default:
 		return "unknown error creating handle"
 	}
